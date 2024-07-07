@@ -1,0 +1,86 @@
+package org.luismore.hlvsapi.utils;
+
+import jakarta.servlet.http.HttpServletResponse;
+import org.luismore.hlvsapi.domain.entities.User;
+import org.luismore.hlvsapi.services.UserService;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class WebSecurityConfiguration {
+
+    private final PasswordEncoder passwordEncoder;
+    private final UserService userService;
+    private final JWTTokenFilter filter;
+
+    public WebSecurityConfiguration(PasswordEncoder passwordEncoder, UserService userService, JWTTokenFilter filter) {
+        this.passwordEncoder = passwordEncoder;
+        this.userService = userService;
+        this.filter = filter;
+    }
+
+    @Bean
+    AuthenticationManager authenticationManagerBean(HttpSecurity http) throws Exception {
+        AuthenticationManagerBuilder managerBuilder = http.getSharedObject(AuthenticationManagerBuilder.class);
+
+        managerBuilder
+                .userDetailsService(identifier -> {
+                    User user = userService.findByIdentifier(identifier);
+
+                    if (user == null)
+                        throw new UsernameNotFoundException("User: " + identifier + ", not found!");
+
+                    return user;
+                })
+                .passwordEncoder(passwordEncoder);
+
+        return managerBuilder.build();
+    }
+
+    @Bean
+    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        // Http login and cors disabled
+        http.httpBasic(Customizer.withDefaults()).csrf(csrf -> csrf.disable());
+
+        // Route filter
+        http.authorizeHttpRequests(auth ->
+                auth
+                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/ws/**").permitAll()
+                        .requestMatchers("/api/servo/move").permitAll()
+                        .requestMatchers("/api/servo/moveP").permitAll()
+                        .requestMatchers("/api/entries/anonymous").permitAll()
+                        .requestMatchers("/v1/authenticate", "/v3/api-docs/**", "/swagger-ui/**", "/HLVSDocumentation.html").permitAll()
+                        .anyRequest().authenticated()
+        );
+
+        // Statelessness
+        http.sessionManagement(management -> management.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+
+        // Unauthorized handler
+        http.exceptionHandling(handling -> handling.authenticationEntryPoint((req, res, ex) -> {
+            res.sendError(
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "Auth fail!"
+            );
+        }));
+
+        // JWT filter
+        http.addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+}
